@@ -8,44 +8,89 @@ from color_palette import PRIMARY, SECONDARY, TERTIARY
 # Create GSheets connection
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# Mode selection in sidebar
-st.sidebar.header("Data Source")
-mode = st.sidebar.radio(
-    "Select Mode",
-    ["Season Mode", "Tournament Mode"],
-    index=1,
-    help="Season Mode uses regular match data, Tournament Mode uses tournament-specific data"
-)
+# Session selection in sidebar
+st.sidebar.header("Session Management")
 
-# Determine worksheet names based on mode
-if mode == "Tournament Mode":
-    worksheet_name = "match_results_tournament"
-    player_names_worksheet = "player_names_tournament"
-else:
-    worksheet_name = "match_results"
-    player_names_worksheet = "player_names"
+# Get current session from session state
+current_session = st.session_state.get("current_session", "")
+
+# If no session is selected, try to load the active session from Google Sheets
+if not current_session:
+    try:
+        sessions_df = conn.read(worksheet="sessions")
+        if not sessions_df.empty and "session_name" in sessions_df.columns:
+            # Check if there's an active session
+            if "active" in sessions_df.columns:
+                active_sessions = sessions_df[sessions_df["active"] == True]
+                if not active_sessions.empty:
+                    current_session = active_sessions.iloc[0]["session_name"]
+                    st.session_state["current_session"] = current_session
+                    st.sidebar.success(f"✅ Loaded active session: **{current_session}**")
+                else:
+                    # No active session set, auto-select first available
+                    available_sessions = sessions_df["session_name"].dropna().tolist()
+                    if available_sessions:
+                        current_session = available_sessions[0]
+                        st.session_state["current_session"] = current_session
+                        st.sidebar.info(f"🔄 Auto-selected session: **{current_session}**")
+                        st.sidebar.info("🔧 Go to Settings to set an active session for all devices")
+                    else:
+                        st.sidebar.error("❌ No sessions found!")
+                        st.sidebar.markdown("**Please go to Settings to create a session:**")
+                        if st.sidebar.button("🔧 Go to Settings"):
+                            st.switch_page("pages/3_Settings.py")
+                        st.stop()
+            else:
+                # No active column, auto-select first available
+                available_sessions = sessions_df["session_name"].dropna().tolist()
+                if available_sessions:
+                    current_session = available_sessions[0]
+                    st.session_state["current_session"] = current_session
+                    st.sidebar.info(f"🔄 Auto-selected session: **{current_session}**")
+                    st.sidebar.info("🔧 Go to Settings to set an active session for all devices")
+                else:
+                    st.sidebar.error("❌ No sessions found!")
+                    st.sidebar.markdown("**Please go to Settings to create a session:**")
+                    if st.sidebar.button("🔧 Go to Settings"):
+                        st.switch_page("pages/3_Settings.py")
+                    st.stop()
+        else:
+            # Sessions worksheet exists but has no data
+            st.sidebar.error("❌ No sessions found!")
+            st.sidebar.markdown("**Please go to Settings to create a session:**")
+            if st.sidebar.button("🔧 Go to Settings"):
+                st.switch_page("pages/3_Settings.py")
+            st.stop()
+    except Exception:
+        # Sessions worksheet doesn't exist
+        st.sidebar.error("❌ No sessions found!")
+        st.sidebar.markdown("**Please go to Settings to create your first session:**")
+        if st.sidebar.button("🔧 Go to Settings"):
+            st.switch_page("pages/3_Settings.py")
+        st.stop()
+
+# Show current session status
+st.sidebar.success(f"✅ Active Session: **{current_session}**")
+if st.sidebar.button("🔧 Change Session"):
+    st.switch_page("pages/3_Settings.py")
+
+# Determine worksheet names based on current session
+worksheet_name = f"{current_session}_match_results"
+player_names_worksheet = f"{current_session}_player_names"
 
 try:
     df = conn.read(worksheet=worksheet_name)
     
-    # Handle empty worksheet (this is normal for new tournaments)
+    # Handle empty worksheet (this is normal for new sessions)
     if df.empty:
-        if mode == "Tournament Mode":
-            st.info(f"📋 Tournament worksheet '{worksheet_name}' is empty. This is normal for a new tournament - you can start entering match results below!")
-            # Create an empty dataframe with the expected columns for tournament mode
-            df = pd.DataFrame(columns=["date", "Player1", "Player2", "Score1", "Score2", "match_number_total", "match_number_day"])
-        else:
-            st.error(f"No data found in worksheet '{worksheet_name}'. Please check if the worksheet exists and contains data.")
-            st.stop()
+        st.info(f"📋 Session worksheet '{worksheet_name}' is empty. This is normal for a new session - you can start entering match results below!")
+        # Create an empty dataframe with the expected columns
+        df = pd.DataFrame(columns=["date", "Player1", "Player2", "Score1", "Score2", "match_number_total", "match_number_day"])
             
 except Exception as e:
-    if mode == "Tournament Mode":
-        st.info(f"📋 Tournament worksheet '{worksheet_name}' doesn't exist yet. This is normal for a new tournament - you can start entering match results below!")
-        # Create an empty dataframe with the expected columns for tournament mode
-        df = pd.DataFrame(columns=["date", "Player1", "Player2", "Score1", "Score2", "match_number_total", "match_number_day"])
-    else:
-        st.error(f"Error loading worksheet '{worksheet_name}': {str(e)}")
-        st.stop()
+    st.info(f"📋 Session worksheet '{worksheet_name}' doesn't exist yet. This is normal for a new session - you can start entering match results below!")
+    # Create an empty dataframe with the expected columns
+    df = pd.DataFrame(columns=["date", "Player1", "Player2", "Score1", "Score2", "match_number_total", "match_number_day"])
 
 # Only process data if dataframe is not empty
 if not df.empty:
@@ -75,13 +120,13 @@ with online_form:
 
     def reset_session_state():
         """Helper function to reset session state."""
-        st.session_state["player1_name"] = player_names[
-            0
-        ]  # Default to the first player
+        if player_names:
+            st.session_state["player1_name"] = player_names[0]  # Default to the first player
+            st.session_state["player2_name"] = player_names[min(3, len(player_names) - 1)]  # Default to the fourth player or last available
+        else:
+            st.session_state["player1_name"] = "Player 1"
+            st.session_state["player2_name"] = "Player 2"
         st.session_state["player1_score"] = 0
-        st.session_state["player2_name"] = player_names[
-            3
-        ]  # Default to the first player
         st.session_state["player2_score"] = 0
         st.session_state["matchday_input"] = date.today()
         st.session_state["data_written"] = False
@@ -91,15 +136,17 @@ with online_form:
         if "data_written" not in st.session_state:
             st.session_state["data_written"] = False
         if "player1_name" not in st.session_state:
-            st.session_state["player1_name"] = player_names[
-                0
-            ]  # Default to the first player
+            if player_names:
+                st.session_state["player1_name"] = player_names[0]  # Default to the first player
+            else:
+                st.session_state["player1_name"] = "Player 1"
         if "player1_score" not in st.session_state:
             st.session_state["player1_score"] = 0
         if "player2_name" not in st.session_state:
-            st.session_state["player2_name"] = player_names[
-                3
-            ]  # Default to the first player
+            if player_names:
+                st.session_state["player2_name"] = player_names[min(3, len(player_names) - 1)]  # Default to the fourth player or last available
+            else:
+                st.session_state["player2_name"] = "Player 2"
         if "player2_score" not in st.session_state:
             st.session_state["player2_score"] = 0
         if "matchday_input" not in st.session_state:
@@ -116,12 +163,19 @@ with online_form:
             st.title("Log Your Match Results")
 
             # Widgets with session state management
-            player1_name = st.selectbox(
-                "Player 1",
-                player_names,
-                index=player_names.index(st.session_state["player1_name"]),
-                key="player1_name",
-            )
+            if player_names:
+                player1_name = st.selectbox(
+                    "Player 1",
+                    player_names,
+                    index=player_names.index(st.session_state["player1_name"]) if st.session_state["player1_name"] in player_names else 0,
+                    key="player1_name",
+                )
+            else:
+                player1_name = st.text_input(
+                    "Player 1",
+                    value=st.session_state["player1_name"],
+                    key="player1_name",
+                )
             player1_score = st.number_input(
                 "Player 1 Score",
                 min_value=0,
@@ -129,12 +183,19 @@ with online_form:
                 value=st.session_state["player1_score"],
                 key="player1_score",
             )
-            player2_name = st.selectbox(
-                "Player 2",
-                player_names,
-                index=player_names.index(st.session_state["player2_name"]),
-                key="player2_name",
-            )
+            if player_names:
+                player2_name = st.selectbox(
+                    "Player 2",
+                    player_names,
+                    index=player_names.index(st.session_state["player2_name"]) if st.session_state["player2_name"] in player_names else 0,
+                    key="player2_name",
+                )
+            else:
+                player2_name = st.text_input(
+                    "Player 2",
+                    value=st.session_state["player2_name"],
+                    key="player2_name",
+                )
             player2_score = st.number_input(
                 "Player 2 Score",
                 min_value=0,
@@ -188,7 +249,7 @@ with online_form:
 
 with show_me_the_list:
     st.header("🏓 Match Results Management")
-    st.markdown(f"**Current Mode:** {mode}")
+    st.markdown(f"**Current Session:** {current_session}")
     st.markdown(f"**Managing matches for:** `{worksheet_name}`")
     
     # Display current matches
@@ -245,12 +306,19 @@ with show_me_the_list:
                 
                 col1, col2 = st.columns(2)
                 with col1:
-                    edit_player1 = st.selectbox(
-                        "Player 1",
-                        options=player_names,
-                        index=player_names.index(match_row["Player1"]) if match_row["Player1"] in player_names else 0,
-                        key="edit_player1"
-                    )
+                    if player_names:
+                        edit_player1 = st.selectbox(
+                            "Player 1",
+                            options=player_names,
+                            index=player_names.index(match_row["Player1"]) if match_row["Player1"] in player_names else 0,
+                            key="edit_player1"
+                        )
+                    else:
+                        edit_player1 = st.text_input(
+                            "Player 1",
+                            value=match_row["Player1"],
+                            key="edit_player1"
+                        )
                     edit_score1 = st.number_input(
                         "Player 1 Score",
                         min_value=0,
@@ -258,12 +326,19 @@ with show_me_the_list:
                         key="edit_score1"
                     )
                 with col2:
-                    edit_player2 = st.selectbox(
-                        "Player 2",
-                        options=player_names,
-                        index=player_names.index(match_row["Player2"]) if match_row["Player2"] in player_names else 0,
-                        key="edit_player2"
-                    )
+                    if player_names:
+                        edit_player2 = st.selectbox(
+                            "Player 2",
+                            options=player_names,
+                            index=player_names.index(match_row["Player2"]) if match_row["Player2"] in player_names else 0,
+                            key="edit_player2"
+                        )
+                    else:
+                        edit_player2 = st.text_input(
+                            "Player 2",
+                            value=match_row["Player2"],
+                            key="edit_player2"
+                        )
                     edit_score2 = st.number_input(
                         "Player 2 Score",
                         min_value=0,
@@ -435,256 +510,3 @@ with show_me_the_list:
                     except KeyError:
                         st.error("Admin password not found in secrets. Please configure 'admin_password' in your Streamlit secrets.")
 
-with player_management:
-    st.header("🎾 Player Management")
-    st.markdown(f"**Current Mode:** {mode}")
-    st.markdown(f"**Managing players for:** `{player_names_worksheet}`")
-    
-    # Display current players
-    st.subheader("Current Players")
-    if player_names:
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            # Create a nice display of current players
-            players_df = pd.DataFrame({"Player Name": player_names})
-            players_df.index = players_df.index + 1  # Start numbering from 1
-            st.dataframe(players_df, use_container_width=True)
-        with col2:
-            st.metric("Total Players", len(player_names))
-    else:
-        st.info("No players found. Add some players below!")
-    
-    st.divider()
-    
-    # Add new player form
-    st.subheader("Add New Player")
-    
-    with st.form("add_player_form"):
-        new_player_name = st.text_input(
-            "Player Name",
-            placeholder="Enter player name...",
-            help="Enter the full name of the new player"
-        )
-        
-        col1, col2 = st.columns([1, 4])
-        with col1:
-            submit_button = st.form_submit_button("Add Player", type="primary")
-        
-        if submit_button:
-            if new_player_name.strip():
-                # Check if player already exists
-                if new_player_name.strip() in player_names:
-                    st.error(f"Player '{new_player_name}' already exists!")
-                else:
-                    try:
-                        # Add new player to the list
-                        updated_player_names = player_names + [new_player_name.strip()]
-                        
-                        # Create dataframe for updating
-                        updated_players_df = pd.DataFrame({"player_names": updated_player_names})
-                        
-                        # Update the worksheet
-                        conn.update(worksheet=player_names_worksheet, data=updated_players_df)
-                        
-                        # Clear cache and show success
-                        st.cache_data.clear()
-                        st.success(f"✅ Player '{new_player_name}' added successfully!")
-                        st.info("🔄 Page will refresh to show the updated player list.")
-                        st.rerun()
-                        
-                    except Exception as e:
-                        if "Worksheet not found" in str(e) or "does not exist" in str(e):
-                            st.error(f"Worksheet '{player_names_worksheet}' doesn't exist yet. This will be created automatically when you add the first player.")
-                            try:
-                                # Try to create the worksheet by updating with initial data
-                                initial_players_df = pd.DataFrame({"player_names": [new_player_name.strip()]})
-                                conn.update(worksheet=player_names_worksheet, data=initial_players_df)
-                                st.cache_data.clear()
-                                st.success(f"✅ Created worksheet '{player_names_worksheet}' and added player '{new_player_name}'!")
-                                st.info("🔄 Page will refresh to show the updated player list.")
-                                st.rerun()
-                            except Exception as create_error:
-                                st.error(f"Error creating worksheet: {str(create_error)}")
-                        else:
-                            st.error(f"Error adding player: {str(e)}")
-            else:
-                st.error("Please enter a valid player name.")
-    
-    # Bulk add players (optional)
-    st.divider()
-    st.subheader("Bulk Add Players")
-    st.markdown("*Add multiple players at once (one per line)*")
-    
-    with st.form("bulk_add_players_form"):
-        bulk_players = st.text_area(
-            "Player Names (one per line)",
-            placeholder="Player 1\nPlayer 2\nPlayer 3\n...",
-            height=150,
-            help="Enter multiple player names, one per line"
-        )
-        
-        col1, col2 = st.columns([1, 4])
-        with col1:
-            bulk_submit = st.form_submit_button("Add All Players", type="secondary")
-        
-        if bulk_submit:
-            if bulk_players.strip():
-                # Parse the input
-                new_players = [name.strip() for name in bulk_players.strip().split('\n') if name.strip()]
-                
-                if new_players:
-                    # Check for duplicates
-                    existing_players = set(player_names)
-                    unique_new_players = [p for p in new_players if p not in existing_players]
-                    duplicates = [p for p in new_players if p in existing_players]
-                    
-                    if duplicates:
-                        st.warning(f"Skipping duplicate players: {', '.join(duplicates)}")
-                    
-                    if unique_new_players:
-                        try:
-                            # Add new players to the list
-                            updated_player_names = player_names + unique_new_players
-                            
-                            # Create dataframe for updating
-                            updated_players_df = pd.DataFrame({"player_names": updated_player_names})
-                            
-                            # Update the worksheet
-                            conn.update(worksheet=player_names_worksheet, data=updated_players_df)
-                            
-                            # Clear cache and show success
-                            st.cache_data.clear()
-                            st.success(f"✅ Added {len(unique_new_players)} new players successfully!")
-                            st.info("🔄 Page will refresh to show the updated player list.")
-                            st.rerun()
-                            
-                        except Exception as e:
-                            if "Worksheet not found" in str(e) or "does not exist" in str(e):
-                                try:
-                                    # Create worksheet with all players
-                                    initial_players_df = pd.DataFrame({"player_names": unique_new_players})
-                                    conn.update(worksheet=player_names_worksheet, data=initial_players_df)
-                                    st.cache_data.clear()
-                                    st.success(f"✅ Created worksheet '{player_names_worksheet}' and added {len(unique_new_players)} players!")
-                                    st.info("🔄 Page will refresh to show the updated player list.")
-                                    st.rerun()
-                                except Exception as create_error:
-                                    st.error(f"Error creating worksheet: {str(create_error)}")
-                            else:
-                                st.error(f"Error adding players: {str(e)}")
-                    else:
-                        st.info("No new players to add (all were duplicates).")
-                else:
-                    st.error("No valid player names found.")
-            else:
-                st.error("Please enter at least one player name.")
-    
-    # Delete players section
-    if player_names:  # Only show delete options if there are players
-        st.divider()
-        st.subheader("Delete Players")
-        
-        # Single player deletion
-        st.markdown("**Remove Single Player**")
-        with st.form("delete_player_form"):
-            player_to_delete = st.selectbox(
-                "Select player to delete",
-                options=player_names,
-                help="Choose a player to remove from the list"
-            )
-            
-            delete_password = st.text_input(
-                "Admin Password",
-                type="password",
-                help="Enter the admin password to confirm deletion"
-            )
-            
-            col1, col2 = st.columns([1, 4])
-            with col1:
-                delete_button = st.form_submit_button("Delete Player", type="secondary")
-            
-            if delete_button:
-                if not delete_password:
-                    st.error("Password is required to delete players.")
-                elif not player_to_delete:
-                    st.error("Please select a player to delete.")
-                else:
-                    try:
-                        admin_password = st.secrets["admin_password"]
-                        if delete_password != admin_password:
-                            st.error("Incorrect password. Player deletion denied.")
-                        else:
-                            # Password is correct, proceed with deletion
-                            try:
-                                # Remove player from the list
-                                updated_player_names = [p for p in player_names if p != player_to_delete]
-                                
-                                # Create dataframe for updating
-                                updated_players_df = pd.DataFrame({"player_names": updated_player_names})
-                                
-                                # Update the worksheet
-                                conn.update(worksheet=player_names_worksheet, data=updated_players_df)
-                                
-                                # Clear cache and show success
-                                st.cache_data.clear()
-                                st.success(f"✅ Player '{player_to_delete}' deleted successfully!")
-                                st.info("🔄 Page will refresh to show the updated player list.")
-                                st.rerun()
-                                
-                            except Exception as e:
-                                st.error(f"Error deleting player: {str(e)}")
-                    except KeyError:
-                        st.error("Admin password not found in secrets. Please configure 'admin_password' in your Streamlit secrets.")
-        
-        # Bulk player deletion
-        st.markdown("**Remove Multiple Players**")
-        with st.form("bulk_delete_players_form"):
-            players_to_delete = st.multiselect(
-                "Select players to delete",
-                options=player_names,
-                help="Choose multiple players to remove from the list"
-            )
-            
-            bulk_delete_password = st.text_input(
-                "Admin Password",
-                type="password",
-                help="Enter the admin password to confirm deletion",
-                key="bulk_delete_password"
-            )
-            
-            col1, col2 = st.columns([1, 4])
-            with col1:
-                bulk_delete_button = st.form_submit_button("Delete Selected", type="secondary")
-            
-            if bulk_delete_button:
-                if not bulk_delete_password:
-                    st.error("Password is required to delete players.")
-                elif not players_to_delete:
-                    st.error("Please select at least one player to delete.")
-                else:
-                    try:
-                        admin_password = st.secrets["admin_password"]
-                        if bulk_delete_password != admin_password:
-                            st.error("Incorrect password. Player deletion denied.")
-                        else:
-                            # Password is correct, proceed with deletion
-                            try:
-                                # Remove selected players from the list
-                                updated_player_names = [p for p in player_names if p not in players_to_delete]
-                                
-                                # Create dataframe for updating
-                                updated_players_df = pd.DataFrame({"player_names": updated_player_names})
-                                
-                                # Update the worksheet
-                                conn.update(worksheet=player_names_worksheet, data=updated_players_df)
-                                
-                                # Clear cache and show success
-                                st.cache_data.clear()
-                                st.success(f"✅ Deleted {len(players_to_delete)} players successfully!")
-                                st.info("🔄 Page will refresh to show the updated player list.")
-                                st.rerun()
-                                
-                            except Exception as e:
-                                st.error(f"Error deleting players: {str(e)}")
-                    except KeyError:
-                        st.error("Admin password not found in secrets. Please configure 'admin_password' in your Streamlit secrets.")
